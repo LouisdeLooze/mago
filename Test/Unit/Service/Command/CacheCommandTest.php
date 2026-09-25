@@ -29,19 +29,16 @@ final class CacheCommandTest extends TestCase
     private array $chunks = [];
 
     #[Test]
-    public function flushRunsTheFlushActionAndListsTheCleanedTypes(): void
+    public function flushAsksWhatToClearInsteadOfFlushingEverything(): void
     {
-        $chat = $this->chat(static fn (array $call): array => [
-            'success' => true,
-            'message' => 'All caches have been flushed',
-            'flushed' => ['config', 'layout'],
-        ]);
+        $chat = $this->chat(static fn (array $call): array => ['success' => true]);
 
         $reply = $this->command($chat)->execute('flush', [], self::ADMIN_ID, $this->chunk());
 
-        self::assertSame([['action' => 'flush']], $chat->inputs());
-        self::assertSame("**All caches flushed.**\n\nCleaned 2 cache types: `config`, `layout`", $reply);
-        self::assertSame(['running', 'done'], array_column(array_column($this->chunks, 'data'), 'status'));
+        self::assertSame([], $chat->inputs(), 'a bare flush runs no tool; it asks first');
+        self::assertStringContainsString('rarely what a change needs', $reply);
+        self::assertStringContainsString('`full_page`', $reply);
+        self::assertStringContainsString('/cache clean', $reply);
     }
 
     #[Test]
@@ -103,9 +100,9 @@ final class CacheCommandTest extends TestCase
     {
         $chat = $this->chat(static fn (array $call): array => ['error' => 'Access denied: nope']);
 
-        $reply = $this->command($chat)->execute('flush', [], self::ADMIN_ID, $this->chunk());
+        $reply = $this->command($chat)->execute('clean', ['config'], self::ADMIN_ID, $this->chunk());
 
-        self::assertSame('**Error:** Access denied: nope', $reply);
+        self::assertStringContainsString('**Error:** Access denied: nope', $reply);
     }
 
     #[Test]
@@ -121,6 +118,40 @@ final class CacheCommandTest extends TestCase
 
         self::assertTrue($this->command($chat, 'write')->isAvailable(self::ADMIN_ID, 'flush'));
         self::assertFalse($this->command($chat, 'disabled')->isAvailable(self::ADMIN_ID));
+    }
+
+    #[Test]
+    public function confirmableToolCallsMapWritesAndLeaveStatusEmpty(): void
+    {
+        $command = $this->command($this->chat(static fn (array $call): array => []));
+
+        // flush ("everything") asks first, so it maps to no card; only the scoped clean does.
+        self::assertSame([], $command->getConfirmableToolCalls('flush', []));
+
+        $calls = $command->getConfirmableToolCalls('clean', ['config', 'full_page', 'config']);
+        self::assertSame(
+            [
+                ['name' => 'cache_manager', 'input' => ['action' => 'flush_type', 'cache_type' => 'config']],
+                ['name' => 'cache_manager', 'input' => ['action' => 'flush_type', 'cache_type' => 'full_page']],
+            ],
+            array_map(static fn (array $call): array => array_diff_key($call, ['id' => true]), $calls)
+        );
+        self::assertMatchesRegularExpression('/^slash_clean_0_[0-9a-f]{12}$/', $calls[0]['id']);
+        self::assertMatchesRegularExpression('/^slash_clean_1_[0-9a-f]{12}$/', $calls[1]['id']);
+
+        self::assertSame([], $command->getConfirmableToolCalls('status', []));
+        self::assertSame([], $command->getConfirmableToolCalls('clean', []));
+    }
+
+    #[Test]
+    public function confirmableToolCallsGetANewIdEveryTimeTheSameCleanIsTyped(): void
+    {
+        $command = $this->command($this->chat(static fn (array $call): array => []));
+
+        $first = $command->getConfirmableToolCalls('clean', ['config']);
+        $second = $command->getConfirmableToolCalls('clean', ['config']);
+
+        self::assertNotSame($first[0]['id'], $second[0]['id']);
     }
 
     /**

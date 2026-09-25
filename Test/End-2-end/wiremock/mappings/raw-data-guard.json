@@ -1,0 +1,40 @@
+{
+  "mappings": [
+    {
+      "name": "Raw data guard - turn 2, the re-present nudge was sent, answer in prose",
+      "priority": 1,
+      "request": {
+        "method": "POST",
+        "urlPath": "/v1/chat/completions",
+        "bodyPatterns": [
+          {"contains": "E2E raw data guard check"},
+          {"contains": "printed raw structured data"}
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": "text/event-stream"},
+        "bodyFileName": "raw-data-guard-represented.sse",
+        "chunkedDribbleDelay": {"numberOfChunks": 10, "totalDuration": 100}
+      }
+    },
+    {
+      "name": "Raw data guard - turn 1, the model dumps raw JSON as text",
+      "priority": 2,
+      "request": {
+        "method": "POST",
+        "urlPath": "/v1/chat/completions",
+        "bodyPatterns": [
+          {"contains": "E2E raw data guard check"},
+          {"doesNotMatch": "(?s).*printed raw structured data.*"}
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": "text/event-stream"},
+        "bodyFileName": "raw-data-guard-dump.sse",
+        "chunkedDribbleDelay": {"numberOfChunks": 10, "totalDuration": 100}
+      }
+    }
+  ]
+}

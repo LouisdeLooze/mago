@@ -7,6 +7,7 @@ declare(strict_types=1);
 namespace MagoAssistant\Mago\Service\Tool;
 
 use MagoAssistant\Mago\Api\Tool\ActionScopedToolInterface;
+use MagoAssistant\Mago\Api\Tool\AvailabilityAwareToolInterface;
 use MagoAssistant\Mago\Api\Tool\ToolInterface;
 use MagoAssistant\Mago\Service\Skills\PermissionChecker;
 
@@ -29,11 +30,15 @@ class ToolRegistry
         private readonly ?PermissionChecker $permissionChecker = null,
         array $tools = []
     ) {
-        $this->tools = $tools;
+        $this->tools = array_filter(
+            $tools,
+            static fn (ToolInterface $tool): bool => !$tool instanceof AvailabilityAwareToolInterface
+                || $tool->isAvailable()
+        );
     }
 
     /**
-     * Get all registered tools (regardless of enabled state)
+     * Get all registered tools that are available on this store (regardless of enabled state)
      *
      * @return ToolInterface[]
      */

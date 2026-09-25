@@ -11,6 +11,22 @@ namespace MagoAssistant\Mago\Service\Command;
  */
 class CacheCommand extends AbstractToolCommand
 {
+    /**
+     * `/cache flush` clears every cache, which is rarely what a change needs and briefly slows the
+     * whole store. Rather than run it or put a flush-all card up, the command asks what actually
+     * changed and why, so the follow-up clears only the cache that covers it.
+     */
+    private const FLUSH_PUSHBACK = "Flushing **every** cache is rarely what a change needs, and it "
+        . "briefly slows the whole store while each cache rebuilds. What are you trying to refresh, "
+        . "and what changed?\n\n"
+        . "- a **product** page, a **category / PLP**, a **CMS page**, or **search results** → that is "
+        . "the `full_page` cache\n"
+        . "- **layout or block** output → `layout`, `block_html`\n"
+        . "- a **configuration** change → `config`\n\n"
+        . "Tell me which one and why, and I will clear only that. You can also target a type directly, "
+        . "e.g. `/cache clean full_page` (see `/cache status` for the list). If you genuinely need to "
+        . "clear everything, say so and why.";
+
     public function getName(): string
     {
         return 'cache';
@@ -45,7 +61,7 @@ class CacheCommand extends AbstractToolCommand
     public function execute(string $subcommand, array $args, int $adminUserId, callable $onChunk): string
     {
         return match ($subcommand) {
-            'flush' => $this->flush($adminUserId, $onChunk),
+            'flush' => self::FLUSH_PUSHBACK,
             'clean' => $this->clean($args, $adminUserId, $onChunk),
             'status' => $this->status($adminUserId, $onChunk),
             default => $this->renderError('Unknown subcommand: ' . $subcommand),
@@ -57,25 +73,26 @@ class CacheCommand extends AbstractToolCommand
         return 'cache_manager';
     }
 
-    private function flush(int $adminUserId, callable $onChunk): string
+    /**
+     * clean names its own cache types, so it goes straight to the confirmation card, one flush_type
+     * call per distinct type (an empty clean is a usage prompt, so no call and it runs directly).
+     * flush ("everything") deliberately maps to no call: it is answered with a question first (see
+     * FLUSH_PUSHBACK), not a flush-all card. status is read-only.
+     */
+    public function getConfirmableToolCalls(string $subcommand, array $args): array
     {
-        $result = $this->runTool(['action' => 'flush'], $adminUserId, $onChunk);
-        if (isset($result['error'])) {
-            return $this->renderError((string)$result['error']);
+        if ($subcommand !== 'clean') {
+            return [];
         }
 
-        $flushed = array_map('strval', (array)($result['flushed'] ?? []));
-        $reply = '**All caches flushed.**';
-        if ($flushed !== []) {
-            $reply .= sprintf(
-                "\n\nCleaned %d cache types: %s",
-                count($flushed),
-                implode(', ', array_map(static fn (string $id): string => '`' . $id . '`', $flushed))
-            );
+        $calls = [];
+        foreach (array_values(array_unique($args)) as $index => $type) {
+            $calls[] = $this->toolCall($subcommand, $index, ['action' => 'flush_type', 'cache_type' => $type]);
         }
 
-        return $reply;
+        return $calls;
     }
+
 
     /**
      * Clean the given cache types one by one, so one unknown type does not stop the rest

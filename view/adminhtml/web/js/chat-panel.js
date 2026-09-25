@@ -223,7 +223,7 @@ define([
         formBridge.whenFormReady(entityType, NAVIGATE_INTENT_FORM_TIMEOUT_MS, function (found) {
             if (!found) {
                 hideNavigateStatus();
-                addMsg('assistant', renderMd(formatNavigateTimeoutMessage(intent.target)));
+                addMsg('assistant', renderPanelMd(formatNavigateTimeoutMessage(intent.target)));
                 return;
             }
 
@@ -252,7 +252,7 @@ define([
         if (!result) return;
         var text = formatApplyOutcomeMessage(result);
         if (!text) return;
-        addMsg('assistant', renderMd(text));
+        addMsg('assistant', renderPanelMd(text));
     }
 
     function saveState() {
@@ -665,6 +665,15 @@ define([
         .then(function(r) { return r.json(); })
         .then(function(data) {
             loading.style.display = 'none';
+            // The saved conversation is gone or owned by another admin (e.g. after logging in as a
+            // different user in the same tab); drop the dead id and start fresh, or it fails here on
+            // every page load.
+            if (data && data.error) {
+                conversationId = null;
+                saveState();
+                showGreeting();
+                return;
+            }
             var loaded = data.messages || [];
             if (!loaded.length) {
                 showGreeting();
@@ -758,23 +767,47 @@ define([
         };
         // A ```mago fenced block holds a widget spec ({"type": "stat", ...} or a
         // list of them) and renders as the matching widget. While the block is
-        // still streaming in, the JSON is incomplete and a skeleton holds its place.
+        // still streaming in, the JSON is incomplete and a skeleton holds its place;
+        // a block that is still invalid once the answer is complete renders nothing.
         markedRenderer.code = function(token) {
             var lang = typeof token === 'object' ? token.lang : arguments[1];
             if (lang === 'mago' && UI) {
                 var code = typeof token === 'object' ? token.text : token;
-                return UI.renderJson(code) || UI.skeleton().outerHTML;
+                return UI.renderJson(code) || (widgetsStreaming ? UI.skeleton().outerHTML : '');
             }
             return marked.Renderer.prototype.code.apply(this, arguments);
         };
         marked.use({ renderer: markedRenderer, gfm: true, breaks: true });
     }
 
+    var widgetsStreaming = false;
+
+    // Renders an answer that is still coming in: an incomplete widget block shows a skeleton.
+    function renderStreamingMd(t) {
+        widgetsStreaming = true;
+        try {
+            return renderMd(t);
+        } finally {
+            widgetsStreaming = false;
+        }
+    }
+
     function renderMd(t) {
         if (!t) return '';
         // Model output is attacker-influenceable (tool results can carry injected instructions), so
         // raw HTML must never reach innerHTML: escape first, then let marked render markdown only.
-        var safe = esc(t);
+        return renderEscapedMd(esc(t));
+    }
+
+    // For sentences the panel builds itself (chat/confirm-text.js). Every value in them that came
+    // from the store or the model is already escaped with text.escapeForMarkdown and wrapped in a
+    // <code> the panel wrote, so escaping again would show that <code> and every entity as text.
+    function renderPanelMd(t) {
+        if (!t) return '';
+        return renderEscapedMd(t);
+    }
+
+    function renderEscapedMd(safe) {
         if (window.marked) {
             return marked.parse(safe);
         }
@@ -1088,7 +1121,12 @@ define([
                     try { var d=JSON.parse(ln.substring(6)); } catch(e){return;}
                     if (evt==='text'&&d.text) {
                         if (!msg) { loading.style.display='none'; msg=addMsg('assistant',''); content=msg.querySelector('.mago-message-content'); }
-                        full+=d.text; content.innerHTML=renderMd(full); msgs.scrollTop=msgs.scrollHeight;
+                        full+=d.text; content.innerHTML=renderStreamingMd(full); msgs.scrollTop=msgs.scrollHeight;
+                    }
+                    // The server caught a raw JSON/XML dump in the finished reply and is re-presenting it:
+                    // drop what streamed so the corrected answer streams into a clean message.
+                    else if (evt==='replace') {
+                        if (content) { full=''; content.innerHTML=''; }
                     }
                     else if (evt==='conversation') { conversationId=d.conversation_id; saveState(); }
                     else if (evt==='tool_call') {
@@ -1108,6 +1146,7 @@ define([
                     }
                     else if (evt==='done') {
                         gotDone = true;
+                        if (content && full) { content.innerHTML = renderMd(full); }
                         if(d.conversation_id) conversationId=d.conversation_id;
                         saveState(); releaseInput();
                         if (d.pending_confirmation && msg && !writeToolDetected) {
@@ -1175,7 +1214,7 @@ define([
            both the description and the parameter table, which would otherwise show the raw
            directive JSON. Every other tool keeps the generic card. */
         var formWriteMessage = isFormWrite(first)
-            ? {html: renderMd(formatConfirmMessage(tools))}
+            ? {html: renderPanelMd(formatConfirmMessage(tools))}
             : null;
         var hooks = {actions: 'mago-confirm-actions', allow: 'mago-btn--confirm', confirm: 'mago-btn--confirm', later: 'mago-btn--reject', cancel: 'mago-btn--reject'};
         var irreversible = tools.filter(function(t) { return t.irreversible; });
@@ -1223,6 +1262,10 @@ define([
             });
         }
         var actions = card.querySelector('.mago-confirm-actions');
+        // A write carrying a masked personal value (#114) is allowed, but only with that value in plain sight.
+        if (tools.some(function(t) { return t.sensitive; })) {
+            actions.parentNode.insertBefore(UI.callout({tone: 'warn', text: 'This may write personal data (such as an email address or phone number). Check the values before you allow it.'}), actions);
+        }
         msgEl.appendChild(card);
         msgs.scrollTop = msgs.scrollHeight;
 
@@ -1376,7 +1419,7 @@ define([
                     try { var d=JSON.parse(ln.substring(6)); } catch(e){return;}
                     if (evt==='text'&&d.text) {
                         if (!msg) { loading.style.display='none'; msg=addMsg('assistant',''); content=msg.querySelector('.mago-message-content'); }
-                        full+=d.text; content.innerHTML=renderMd(full); msgs.scrollTop=msgs.scrollHeight;
+                        full+=d.text; content.innerHTML=renderStreamingMd(full); msgs.scrollTop=msgs.scrollHeight;
                     }
                     else if (evt==='tool_call') {
                         if (!msg) { loading.style.display='none'; msg=addMsg('assistant',''); content=msg.querySelector('.mago-message-content'); }
@@ -1407,6 +1450,7 @@ define([
                     }
                     else if (evt==='form_apply') { applyPending = true; applyFormDirective(d, handleApplyOutcome); }
                     else if (evt==='done') {
+                        if (content && full) { content.innerHTML = renderMd(full); }
                         if (d.conversation_id) conversationId=d.conversation_id;
                         saveState(); releaseInput();
                         finishRun(failed ? 'failed' : 'done');

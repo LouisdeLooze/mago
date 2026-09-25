@@ -11,6 +11,7 @@ use MagoAssistant\Mago\Api\Tool\ValidatingToolInterface;
 use MagoAssistant\Mago\Api\ChatServiceInterface;
 use MagoAssistant\Mago\Api\Tool\IrreversibleToolInterface;
 use MagoAssistant\Mago\Api\Tool\ToolInterface;
+use MagoAssistant\Mago\Api\Tool\UpfrontGuidanceToolInterface;
 use MagoAssistant\Mago\Api\Config\RepositoryInterface as ConfigRepository;
 use MagoAssistant\Mago\Logger\DebugLogger;
 use MagoAssistant\Mago\Logger\ErrorLogger;
@@ -27,6 +28,9 @@ class ChatService implements ChatServiceInterface
 
     /** Marker that opens the store scope section so it is never injected twice */
     private const STORE_SCOPE_MARKER = '[Store scope]';
+
+    /** Marker that opens the tool guidance section so it is never injected twice */
+    private const TOOL_GUIDANCE_MARKER = '[Tool usage guidance]';
 
     /**
      * A tool result carrying this key gets its value forwarded to the panel as a form_apply SSE
@@ -62,6 +66,20 @@ class ChatService implements ChatServiceInterface
             . 'make it now. Otherwise summarise the result for the user.',
     ];
 
+    /**
+     * A finished answer that printed raw JSON or XML as text is unreadable to the end user. One
+     * follow-up turn asks the model to re-present it — a widget where one fits, otherwise prose —
+     * instead of the dump. Applied once per answer so a stubborn model does not loop.
+     */
+    private const RE_PRESENT_NUDGE = [
+        'role' => 'user',
+        'content' => 'Your previous reply printed raw structured data (JSON or XML) as text, which the '
+            . 'end user cannot read. Send the answer again: put the data in a ```mago widget block '
+            . '(record, table, stat, entityList, …) when one fits its shape, otherwise summarise it in '
+            . 'short readable prose. Never paste raw JSON or XML into the reply, even alongside other '
+            . 'text. Use only data a tool already returned.',
+    ];
+
     public function processMessage(array $messages, ?int $conversationId = null, ?int $adminUserId = null): array
     {
         try {
@@ -77,9 +95,10 @@ class ChatService implements ChatServiceInterface
         if ($conversationId !== null) {
             $this->privacyService->beginConversation($conversationId);
         }
-        $messages = $this->privacyService->scrubMessages($this->prependSystemMessage($messages));
+        $messages = $this->privacyService->scrubMessages($this->prependSystemMessage($messages, $adminUserId));
         $instructedTools = [];
         $nudged = false;
+        $rePresented = false;
 
         for ($i = 0; $i < $maxIterations; $i++) {
             try {
@@ -95,6 +114,12 @@ class ChatService implements ChatServiceInterface
                 if ($this->needsNudge($response, $messages, $nudged)) {
                     $messages[] = self::EMPTY_TURN_NUDGE;
                     $nudged = true;
+                    continue;
+                }
+                if (!$rePresented && $this->looksLikeRawDataDump((string)($response['content'] ?? ''))) {
+                    $messages[] = ['role' => 'assistant', 'content' => $response['content']];
+                    $messages[] = self::RE_PRESENT_NUDGE;
+                    $rePresented = true;
                     continue;
                 }
                 return $response;
@@ -125,7 +150,10 @@ class ChatService implements ChatServiceInterface
                 $messages[] = [
                     'role' => 'tool',
                     'tool_call_id' => $toolCall['id'],
-                    'content' => json_encode($result, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE),
+                    'content' => json_encode(
+                        $this->withoutClientDirective($result),
+                        JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE
+                    ),
                 ];
 
                 $this->injectToolInstructions($toolCall, $adminUserId, $messages, $instructedTools);
@@ -144,9 +172,10 @@ class ChatService implements ChatServiceInterface
         if ($conversationId !== null) {
             $this->privacyService->beginConversation($conversationId);
         }
-        $messages = $this->privacyService->scrubMessages($this->prependSystemMessage($messages));
+        $messages = $this->privacyService->scrubMessages($this->prependSystemMessage($messages, $adminUserId));
         $instructedTools = [];
         $nudged = false;
+        $rePresented = false;
         $allToolCalls = [];
 
         // Rehydrate the text the admin sees, holding a token that splits across chunks. Everything
@@ -189,6 +218,16 @@ class ChatService implements ChatServiceInterface
                     $nudged = true;
                     continue;
                 }
+                if (!$rePresented && $this->looksLikeRawDataDump((string)($response['content'] ?? ''))) {
+                    // The raw answer already streamed to the panel; tell it to drop what it showed,
+                    // then let the model re-present the data on the next turn, which streams into the
+                    // cleared message. The clean re-presentation is what is returned and stored.
+                    $onChunk('replace', []);
+                    $messages[] = ['role' => 'assistant', 'content' => $response['content']];
+                    $messages[] = self::RE_PRESENT_NUDGE;
+                    $rePresented = true;
+                    continue;
+                }
                 if (!empty($allToolCalls)) {
                     $response['executed_tool_calls'] = $allToolCalls;
                 }
@@ -211,34 +250,10 @@ class ChatService implements ChatServiceInterface
                     // The same details go back on the calls themselves: the stored row is what a
                     // reloaded conversation rebuilds its card from, and the raw call carries
                     // neither the description nor the impact list the card is made of.
-                    $confirmTools = [];
-                    $describedCalls = [];
-                    foreach ($response['tool_calls'] as $tc) {
-                        $t = $this->requiresConfirmation($tc, $adminUserId)
-                            ? $this->toolRegistry->getTool($tc['name'], $adminUserId)
-                            : null;
-                        if ($t === null) {
-                            $describedCalls[] = $tc;
-                            continue;
-                        }
-                        // Display copy only (#97 decision 5): the admin must see the real values
-                        // they are approving, not opaque tokens; the persisted tool_calls stay
-                        // tokenised and are re-checked on the confirm round-trip. describeRisk()
-                        // reads the same copy, because looking an impact up by mago://order_1 finds
-                        // nothing and the card then loses its list for precisely the irreversible
-                        // actions it exists to spell out.
-                        $shownInput = $this->privacyService->rehydrateArguments(
-                            $this->inputForAction($t, $tc['input'] ?? [])
-                        );
-                        $details = [
-                            'id' => (string)($tc['id'] ?? ''),
-                            'name' => $tc['name'],
-                            'description' => $t->getDescription(),
-                            'input' => $shownInput,
-                        ] + $this->describeRisk($t, $shownInput, $adminUserId);
-                        $confirmTools[] = $details;
-                        $describedCalls[] = $tc + $details;
-                    }
+                    [$confirmTools, $describedCalls] = $this->describedConfirmationCalls(
+                        $response['tool_calls'],
+                        $adminUserId
+                    );
                     $onChunk('confirm', ['tools' => $confirmTools]);
                     return [
                         'content' => $response['content'],
@@ -299,6 +314,80 @@ class ChatService implements ChatServiceInterface
         }
 
         return ['content' => 'Maximum tool iterations reached.', 'tool_calls' => []];
+    }
+
+    /**
+     * Put a set of write tool calls to the administrator on the confirmation card without a model
+     * turn, and return the same pending result the streaming path returns for a write the model
+     * proposed. The slash-command write path (/cache flush, /index reindex) uses this so a typed
+     * write is confirmed on the same card as one the assistant asked for, instead of running at once.
+     *
+     * @param array<int, array<string, mixed>> $toolCalls
+     * @param callable|null $onChunk fn(string $type, array $data)
+     * @param int|null $adminUserId
+     * @return array{content: string, tool_calls: array<int, array<string, mixed>>, pending_confirmation: bool}
+     */
+    public function prepareToolConfirmation(
+        array $toolCalls,
+        ?callable $onChunk = null,
+        ?int $adminUserId = null
+    ): array {
+        [$confirmTools, $describedCalls] = $this->describedConfirmationCalls($toolCalls, $adminUserId);
+        if ($onChunk !== null) {
+            $onChunk('confirm', ['tools' => $confirmTools]);
+        }
+
+        return [
+            'content' => '',
+            'tool_calls' => $describedCalls,
+            'pending_confirmation' => true,
+        ];
+    }
+
+    /**
+     * The confirmation card's tools[] payload for a set of tool calls, and the same details folded
+     * back onto each call so a reloaded conversation rebuilds the card from the stored row. A call
+     * that does not require confirmation is carried through undescribed.
+     *
+     * The described input is a display copy only (#97 decision 5): the admin must see the real
+     * values they are approving, not opaque tokens; the persisted tool_calls stay tokenised and are
+     * re-checked on the confirm round-trip. describeRisk() reads the same copy, because looking an
+     * impact up by mago://order_1 finds nothing and the card then loses its list for precisely the
+     * irreversible actions it exists to spell out.
+     *
+     * @param array<int, array<string, mixed>> $toolCalls
+     * @param int|null $adminUserId
+     * @return array{0: array<int, array<string, mixed>>, 1: array<int, array<string, mixed>>} [$confirmTools, $describedCalls]
+     */
+    private function describedConfirmationCalls(array $toolCalls, ?int $adminUserId): array
+    {
+        $confirmTools = [];
+        $describedCalls = [];
+        foreach ($toolCalls as $tc) {
+            $t = $this->requiresConfirmation($tc, $adminUserId)
+                ? $this->toolRegistry->getTool($tc['name'], $adminUserId)
+                : null;
+            if ($t === null) {
+                $describedCalls[] = $tc;
+                continue;
+            }
+            $shownInput = $this->privacyService->rehydrateArguments(
+                $this->inputForAction($t, $tc['input'] ?? [])
+            );
+            $details = [
+                'id' => (string)($tc['id'] ?? ''),
+                'name' => $tc['name'],
+                'description' => $t->getDescription(),
+                'input' => $shownInput,
+            ] + $this->describeRisk($t, $shownInput, $adminUserId);
+            if ($this->privacyService->containsPersonalToken($tc['input'] ?? [])) {
+                $details['sensitive'] = true;
+            }
+            $confirmTools[] = $details;
+            $describedCalls[] = $tc + $details;
+        }
+
+        return [$confirmTools, $describedCalls];
     }
 
     /**
@@ -528,6 +617,17 @@ class ChatService implements ChatServiceInterface
         return $result;
     }
 
+    /**
+     * The part of a tool result that only the browser reads, if the tool sent one
+     *
+     * @param array<string, mixed> $result
+     * @return array<string, mixed>|null
+     */
+    private function clientDirectiveOf(array $result): ?array
+    {
+        return is_array($result[self::CLIENT_DIRECTIVE_KEY] ?? null) ? $result[self::CLIENT_DIRECTIVE_KEY] : null;
+    }
+
     private function executeTool(array $toolCall, ?int $adminUserId = null): array
     {
         $tool = $this->toolRegistry->getTool($toolCall['name'], $adminUserId);
@@ -551,11 +651,11 @@ class ChatService implements ChatServiceInterface
                 ]);
             }
             $input = $toolCall['input'] ?? [];
-            // A sensitive-class token (masked personal value, admin URL) never rehydrates into a
-            // write, resolvable or not: prompt injection could otherwise steer it into stored data
-            // an attacker can read back (the rehydration-oracle chain). Checked BEFORE rehydration.
+            // An admin URL token never rehydrates into a write, resolvable or not: it embeds the
+            // admin secret key. Masked personal values do rehydrate (#114); the confirmation card
+            // shows them in plain text with a warning instead. Checked BEFORE rehydration.
             if (!$tool->isReadOnlyAction($input) && $this->privacyService->containsSensitiveToken($input)) {
-                return ['error' => 'This action would write a masked personal value into data. Ask the '
+                return ['error' => 'This action would write an admin URL into data. Ask the '
                     . 'administrator to enter it directly on the form or in the request.'];
             }
             // The model only ever saw tokens for scrubbed values, so swap them back to real values on
@@ -572,12 +672,16 @@ class ChatService implements ChatServiceInterface
                 $input['_admin_user_id'] = $adminUserId;
             }
             $result = $tool->execute($input);
-            // Privacy filter runs here, before the result is capped and sent to the LLM.
-            $result = $this->privacyService->filterToolResult($classes, $result);
+            // Privacy filter runs here, before the result is capped and sent to the LLM. The
+            // client_directive bypasses it: it only ever goes to the browser, which checks the real
+            // entity id against the open form and stages the real values, so a token there makes
+            // every form write fail the identity check.
+            $directive = $this->clientDirectiveOf($result);
+            $result = $this->privacyService->filterToolResult($classes, $this->withoutClientDirective($result));
             if ($this->configRepository->isDebugEnabled()) {
                 $this->debugLogger->addLog('Tool Result', ['tool' => $toolCall['name'], 'result' => $result]);
             }
-            return $this->capToolResult($result, $toolCall['name']);
+            return $this->capToolResult($this->withClientDirective($result, $directive), $toolCall['name']);
         } catch (\Throwable $e) {
             $this->errorLogger->addLog('Tool Error', [
                 'tool' => $toolCall['name'],
@@ -601,9 +705,7 @@ class ChatService implements ChatServiceInterface
         // A client_directive is stripped again before the tool message is built, so it never
         // spends context: it neither counts towards the cap nor may be truncated away with the
         // rest, or a confirmed write would be staged nowhere with nothing said about it.
-        $directive = is_array($result[self::CLIENT_DIRECTIVE_KEY] ?? null)
-            ? $result[self::CLIENT_DIRECTIVE_KEY]
-            : null;
+        $directive = $this->clientDirectiveOf($result);
         $result = $this->withoutClientDirective($result);
 
         $maxBytes = $this->configRepository->getMaxResponseTokens() * self::BYTES_PER_TOKEN_ESTIMATE;
@@ -749,6 +851,11 @@ class ChatService implements ChatServiceInterface
         }
 
         $instructions = $tool->getInstructions();
+        if ($instructions && $this->configRepository->isAnswerWidgetsEnabled()) {
+            // A tool's instructions describe its results in words; without this line the model
+            // tends to follow that wording and answer with a markdown list instead of a widget.
+            $instructions .= "\n" . $this->answerWidgets->toToolReminder();
+        }
         if ($instructions) {
             $messages[] = [
                 'role' => 'system',
@@ -771,6 +878,8 @@ class ChatService implements ChatServiceInterface
             'product_data.search' => 'Searching products...',
             'product_data.low_stock' => 'Checking low stock...',
             'product_data.get_by_sku' => 'Fetching product...',
+            'stock_level' => 'Checking stock...',
+            'stock_level_msi' => 'Checking stock per source...',
             'customer_data.lookup_customer' => 'Searching for customer...',
             'customer_data.recent_customers' => 'Fetching recent customers...',
             'cms_data.create_page' => 'Creating CMS page...',
@@ -836,13 +945,14 @@ class ChatService implements ChatServiceInterface
      * on the default scope or on a specific website or store view. The widget guide tells it which
      * ```mago blocks the panel can render; it is skipped when answer widgets are switched off.
      */
-    private function prependSystemMessage(array $messages): array
+    private function prependSystemMessage(array $messages, ?int $adminUserId = null): array
     {
         $systemPrompt = $this->configRepository->getSystemPrompt();
         $pageContextLine = $this->pageContextHolder->get()?->toPromptLine();
         $firstSystemIndex = null;
         $hasStoreScope = false;
         $hasWidgetGuide = false;
+        $hasToolGuidance = false;
         foreach ($messages as $index => $msg) {
             if (($msg['role'] ?? '') !== 'system') {
                 continue;
@@ -855,6 +965,9 @@ class ChatService implements ChatServiceInterface
             if (str_contains($content, AnswerWidgets::MARKER)) {
                 $hasWidgetGuide = true;
             }
+            if (str_contains($content, self::TOOL_GUIDANCE_MARKER)) {
+                $hasToolGuidance = true;
+            }
         }
 
         $sections = [];
@@ -863,6 +976,9 @@ class ChatService implements ChatServiceInterface
         }
         if (!$hasWidgetGuide && $this->configRepository->isAnswerWidgetsEnabled()) {
             $sections[] = $this->answerWidgets->toPromptSection();
+        }
+        if (!$hasToolGuidance) {
+            $sections[] = $this->getToolGuidanceSection($adminUserId);
         }
         $extra = implode("\n\n", array_filter($sections, static fn (string $section): bool => $section !== ''));
 
@@ -892,6 +1008,32 @@ class ChatService implements ChatServiceInterface
     }
 
     /**
+     * One system section gathering the upfront guidance of the tools this admin may use, so the
+     * model reads it before its first call — where it can still narrow a "flush everything" or ask
+     * which index is meant. It stays off the confirmation card, which is built from getDescription().
+     * Empty when no available tool carries guidance.
+     */
+    private function getToolGuidanceSection(?int $adminUserId): string
+    {
+        $lines = [];
+        foreach ($this->toolRegistry->getEnabledTools($adminUserId) as $tool) {
+            if (!$tool instanceof UpfrontGuidanceToolInterface) {
+                continue;
+            }
+            $guidance = trim($tool->getUpfrontGuidance());
+            if ($guidance !== '') {
+                $lines[] = '- ' . $tool->getName() . ': ' . $guidance;
+            }
+        }
+
+        if ($lines === []) {
+            return '';
+        }
+
+        return self::TOOL_GUIDANCE_MARKER . "\n" . implode("\n", $lines);
+    }
+
+    /**
      * An empty completion straight after a tool result is worth exactly one retry.
      */
     private function needsNudge(array $response, array $messages, bool $nudged): bool
@@ -902,6 +1044,42 @@ class ChatService implements ChatServiceInterface
         $last = end($messages);
 
         return is_array($last) && ($last['role'] ?? '') === 'tool';
+    }
+
+    /**
+     * Whether a finished answer printed raw JSON or XML data as text — an object/array, or an XML
+     * fragment, that the model should have put in a ```mago widget (or summarised in prose) instead
+     * of pasting in. Prose around the blob is fine; a blob the model deliberately fenced or inlined
+     * as code is not a leak, so fenced and inline code are removed before the check.
+     */
+    private function looksLikeRawDataDump(string $content): bool
+    {
+        $content = trim($content);
+        if ($content === '') {
+            return false;
+        }
+        $stripped = (string)preg_replace('/```.*?```/s', '', $content);
+        $stripped = (string)preg_replace('/`[^`]*`/', '', $stripped);
+
+        // Raw XML: an "<?xml" declaration, or a matching open/close tag pair.
+        if (preg_match('/<\?xml\b/i', $stripped) === 1
+            || preg_match('#<([a-zA-Z][\w:.\-]*)\b[^>]*>[\s\S]*?</\1\s*>#', $stripped) === 1) {
+            return true;
+        }
+
+        // Raw JSON: a balanced object or array anywhere in the text that decodes to a structure with
+        // more than one member. A single-key object or a lone value (e.g. "{"total":"€39"}") is not a
+        // dump; a record, a table or a list of orders is. A malformed candidate simply does not decode.
+        if (preg_match_all('/\{(?:[^{}]|(?R))*\}|\[(?:[^\[\]]|(?R))*\]/', $stripped, $matches) > 0) {
+            foreach ($matches[0] as $candidate) {
+                $decoded = json_decode($candidate, true);
+                if (is_array($decoded) && count($decoded) >= 2) {
+                    return true;
+                }
+            }
+        }
+
+        return false;
     }
 
     /**

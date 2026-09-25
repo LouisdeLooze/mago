@@ -1469,7 +1469,12 @@ define([], function () {
         try {
             spec = JSON.parse(json);
         } catch (e) {
-            return null;
+            // Models sometimes put several widgets in one block as {...},{...}: read that as a list.
+            try {
+                spec = JSON.parse('[' + json + ']');
+            } catch (e2) {
+                return null;
+            }
         }
         var specs = Array.isArray(spec) ? spec : [spec];
         var wrap = el('div', 'mago-answer');

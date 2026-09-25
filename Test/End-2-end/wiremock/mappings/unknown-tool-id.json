@@ -1,0 +1,178 @@
+{
+  "mappings": [
+    {
+      "name": "Unknown indexer id - turn 2, the refusal reached the provider",
+      "priority": 1,
+      "request": {
+        "method": "POST",
+        "urlPath": "/v1/chat/completions",
+        "bodyPatterns": [
+          {
+            "contains": "E2E unknown indexer id check"
+          },
+          {
+            "contains": "\"role\":\"tool\""
+          },
+          {
+            "contains": "Unknown indexer"
+          },
+          {
+            "contains": "valid_indexers"
+          }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "text/event-stream"
+        },
+        "bodyFileName": "unknown-tool-id-indexer-refused.sse",
+        "chunkedDribbleDelay": {
+          "numberOfChunks": 10,
+          "totalDuration": 100
+        }
+      }
+    },
+    {
+      "name": "Unknown indexer id - turn 2 fallback, a tool result without the refusal",
+      "priority": 2,
+      "request": {
+        "method": "POST",
+        "urlPath": "/v1/chat/completions",
+        "bodyPatterns": [
+          {
+            "contains": "E2E unknown indexer id check"
+          },
+          {
+            "contains": "\"role\":\"tool\""
+          }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "text/event-stream"
+        },
+        "bodyFileName": "unknown-tool-id-not-refused.sse",
+        "chunkedDribbleDelay": {
+          "numberOfChunks": 10,
+          "totalDuration": 100
+        }
+      }
+    },
+    {
+      "name": "Unknown indexer id - turn 1, reindex an indexer that does not exist",
+      "priority": 3,
+      "request": {
+        "method": "POST",
+        "urlPath": "/v1/chat/completions",
+        "bodyPatterns": [
+          {
+            "contains": "E2E unknown indexer id check"
+          },
+          {
+            "doesNotMatch": "(?s).*\"role\":\"tool\".*"
+          }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "text/event-stream"
+        },
+        "bodyFileName": "unknown-tool-id-indexer-call.sse",
+        "chunkedDribbleDelay": {
+          "numberOfChunks": 20,
+          "totalDuration": 200
+        }
+      }
+    },
+    {
+      "name": "Unknown cache type - turn 2, the refusal reached the provider",
+      "priority": 1,
+      "request": {
+        "method": "POST",
+        "urlPath": "/v1/chat/completions",
+        "bodyPatterns": [
+          {
+            "contains": "E2E unknown cache type check"
+          },
+          {
+            "contains": "\"role\":\"tool\""
+          },
+          {
+            "contains": "Unknown cache type"
+          },
+          {
+            "contains": "valid_cache_types"
+          }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "text/event-stream"
+        },
+        "bodyFileName": "unknown-tool-id-cache-refused.sse",
+        "chunkedDribbleDelay": {
+          "numberOfChunks": 10,
+          "totalDuration": 100
+        }
+      }
+    },
+    {
+      "name": "Unknown cache type - turn 2 fallback, a tool result without the refusal",
+      "priority": 2,
+      "request": {
+        "method": "POST",
+        "urlPath": "/v1/chat/completions",
+        "bodyPatterns": [
+          {
+            "contains": "E2E unknown cache type check"
+          },
+          {
+            "contains": "\"role\":\"tool\""
+          }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "text/event-stream"
+        },
+        "bodyFileName": "unknown-tool-id-not-refused.sse",
+        "chunkedDribbleDelay": {
+          "numberOfChunks": 10,
+          "totalDuration": 100
+        }
+      }
+    },
+    {
+      "name": "Unknown cache type - turn 1, clean a cache type that does not exist",
+      "priority": 3,
+      "request": {
+        "method": "POST",
+        "urlPath": "/v1/chat/completions",
+        "bodyPatterns": [
+          {
+            "contains": "E2E unknown cache type check"
+          },
+          {
+            "doesNotMatch": "(?s).*\"role\":\"tool\".*"
+          }
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "Content-Type": "text/event-stream"
+        },
+        "bodyFileName": "unknown-tool-id-cache-call.sse",
+        "chunkedDribbleDelay": {
+          "numberOfChunks": 20,
+          "totalDuration": 200
+        }
+      }
+    }
+  ]
+}

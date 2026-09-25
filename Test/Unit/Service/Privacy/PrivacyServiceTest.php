@@ -57,13 +57,25 @@ class PrivacyServiceTest extends TestCase
     }
 
     #[Test]
-    public function sensitiveTokensAreFlaggedForWritesButIdTokensAreNot(): void
+    public function onlyAdminUrlTokensAreRefusedForWrites(): void
     {
         $service = $this->service(new ConversationVault());
 
-        self::assertTrue($service->containsSensitiveToken(['content' => 'Mail mago://email_1 now']));
         self::assertTrue($service->containsSensitiveToken(['nested' => ['link' => 'See mago://url_2']]));
+        self::assertFalse($service->containsSensitiveToken(['content' => 'Mail mago://email_1 now']));
         self::assertFalse($service->containsSensitiveToken(['comment' => 'About mago://order_1 and mago://customer_3']));
+    }
+
+    #[Test]
+    public function personalTokensAreFlaggedForTheConfirmationWarning(): void
+    {
+        $service = $this->service(new ConversationVault());
+
+        self::assertTrue($service->containsPersonalToken(['content' => 'Mail mago://email_1 now']));
+        self::assertTrue($service->containsPersonalToken(['nested' => ['phone' => 'mago://phone_3']]));
+        self::assertTrue($service->containsPersonalToken(['legacy' => 'Mail [email_1] now']));
+        self::assertFalse($service->containsPersonalToken(['link' => 'See mago://url_2']));
+        self::assertFalse($service->containsPersonalToken(['comment' => 'About mago://order_1']));
     }
 
     #[Test]
@@ -125,6 +137,20 @@ class PrivacyServiceTest extends TestCase
     }
 
     #[Test]
+    public function aTokenSplitRightAfterItsFirstLetterIsStillRehydrated(): void
+    {
+        $service = $this->service(new ConversationVault());
+        $service->scrubMessages([['role' => 'user', 'content' => 'mail jan@example.com']]);
+
+        [$emit1, $carry1] = $service->rehydrateStreamDelta('', 'Mail m');
+        [$emit2, $carry2] = $service->rehydrateStreamDelta($carry1, 'ago://email_1 now');
+
+        self::assertSame('Mail ', $emit1);
+        self::assertSame('jan@example.com now', $emit2);
+        self::assertSame('', $carry2);
+    }
+
+    #[Test]
     public function aUrlTokenSplitAcrossChunksIsHeldBackUntilItIsWhole(): void
     {
         $vault = new ConversationVault();
@@ -143,6 +169,56 @@ class PrivacyServiceTest extends TestCase
 
         self::assertSame('Bekijk de details [hier](' . $url . ').', $emitted);
         self::assertStringNotContainsString($token, $emitted);
+    }
+
+    /**
+     * A chunk can end on the bare "m" a token starts with; that "m" has to be held back as well,
+     * or the rest of the token goes out on its own and is never rehydrated.
+     */
+    #[Test]
+    public function aTokenCutRightAfterItsFirstLetterIsStillRehydrated(): void
+    {
+        $vault = new ConversationVault();
+        $service = $this->service($vault);
+        $name = $vault->tokenise('Luuk van der Berg', 'name');
+
+        $emitted = '';
+        $carry = '';
+        foreach (['{"title":"m', 'ago://name', '_1"}'] as $delta) {
+            [$text, $carry] = $service->rehydrateStreamDelta($carry, $delta);
+            $emitted .= $text;
+        }
+        $emitted .= $service->displayText($carry);
+
+        self::assertSame('{"title":"Luuk van der Berg"}', $emitted);
+        self::assertStringNotContainsString($name, $emitted);
+    }
+
+    /**
+     * A widget block carries several tokens; whatever chunk size the provider picks, none of them
+     * may reach the admin tokenised.
+     */
+    #[Test]
+    public function everyTokenInAStreamedWidgetIsRehydratedWhateverTheChunkSize(): void
+    {
+        $vault = new ConversationVault();
+        $service = $this->service($vault);
+        $name = $vault->tokenise('Luuk van der Berg', 'name');
+        $url = $vault->tokenise('https://shop.test/admin/customer/index/edit/id/2/key/abc/', 'url');
+        $answer = "Top:\n\n```mago\n" . '{"type":"entityList","items":[{"title":"' . $name . '","href":"' . $url
+            . '"}]}' . "\n```";
+
+        foreach (range(1, 12) as $size) {
+            $emitted = '';
+            $carry = '';
+            foreach (str_split($answer, $size) as $delta) {
+                [$text, $carry] = $service->rehydrateStreamDelta($carry, $delta);
+                $emitted .= $text;
+            }
+            $emitted .= $service->displayText($carry);
+
+            self::assertSame($service->displayText($answer), $emitted, "Chunk size {$size}");
+        }
     }
 
     #[Test]

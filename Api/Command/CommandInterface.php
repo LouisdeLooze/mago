@@ -52,4 +52,16 @@ interface CommandInterface
      * @return string
      */
     public function execute(string $subcommand, array $args, int $adminUserId, callable $onChunk): string;
+
+    /**
+     * The write tool calls a subcommand would run, so a typed write can be put to the administrator
+     * on the confirmation card instead of executing at once. Each call is {id, name, input}, with an
+     * id unique within the message. A read-only or unknown subcommand, or one that maps to no call
+     * (e.g. a usage prompt), returns [] — the caller then falls back to executing the reply directly.
+     *
+     * @param string $subcommand
+     * @param string[] $args Whitespace-separated arguments after the subcommand
+     * @return array<int, array{id: string, name: string, input: array<string, mixed>}>
+     */
+    public function getConfirmableToolCalls(string $subcommand, array $args): array;
 }

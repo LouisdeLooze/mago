@@ -1,0 +1,8 @@
+data: {"id":"chatcmpl-e2e-slash-1","object":"chat.completion.chunk","created":1790000001,"model":"gemma-3-4b-it-qat","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-e2e-slash-1","object":"chat.completion.chunk","created":1790000001,"model":"gemma-3-4b-it-qat","choices":[{"index":0,"delta":{"content":"The config_webservice cache is clean again."},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-e2e-slash-1","object":"chat.completion.chunk","created":1790000001,"model":"gemma-3-4b-it-qat","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":1200,"completion_tokens":12,"total_tokens":1212}}
+
+data: [DONE]
+

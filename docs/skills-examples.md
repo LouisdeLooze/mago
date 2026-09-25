@@ -79,6 +79,15 @@ Show products under 10 stock
 Find all disabled products
 ```
 
+### stock_level / stock_level_msi (read-only)
+Stock of one product by SKU. Only one of the two is offered: `stock_level` reads the catalog stock item on stores without Multi-Source Inventory, `stock_level_msi` shows quantity per source and salable quantity per stock when MSI is enabled.
+
+```
+How much stock does SKU 24-MB01 have?
+Is SKU 24-MB01 in stock, and are backorders allowed?
+Why is the salable quantity of SKU 24-MB01 lower than its stock?
+```
+
 ### customer_data (read-only)
 Customer counts, recent signups, top spenders, and lookups.
 

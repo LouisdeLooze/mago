@@ -17,6 +17,22 @@ class IndexCommand extends AbstractToolCommand
         'working' => 'Processing',
     ];
 
+    /**
+     * A bare `/index reindex` rebuilds every index and can take a long time on a large catalog.
+     * Rather than run it or put a reindex-all card up, the command asks what changed and why, so the
+     * follow-up rebuilds only the indexers that cover it.
+     */
+    private const REINDEX_PUSHBACK = "Reindexing **everything** rebuilds every index and can take a "
+        . "long time on a large catalog. What changed?\n\n"
+        . "- **prices** → `catalog_product_price`\n"
+        . "- **stock / salable quantity** → `cataloginventory_stock`\n"
+        . "- **search results** → `catalogsearch_fulltext`\n"
+        . "- **category / PLP listings** → `catalog_category_product`, `catalog_product_category`\n"
+        . "- **cart price rules** → `catalogrule_product`\n\n"
+        . "Tell me which one and why, and I will rebuild only that. You can also target one directly, "
+        . "e.g. `/index reindex catalog_product_price` (see `/index status` for the list). If you "
+        . "genuinely need a full reindex, say so and why.";
+
     public function getName(): string
     {
         return 'index';
@@ -61,6 +77,26 @@ class IndexCommand extends AbstractToolCommand
     protected function getToolName(): string
     {
         return 'indexer_manager';
+    }
+
+    /**
+     * reindex with IDs names its own indexers, so it goes straight to the confirmation card, one
+     * reindex call per distinct ID. A bare reindex ("everything") deliberately maps to no call: it
+     * is answered with a question first (see REINDEX_PUSHBACK), not a reindex-all card. list and
+     * status are read-only.
+     */
+    public function getConfirmableToolCalls(string $subcommand, array $args): array
+    {
+        if ($subcommand !== 'reindex' || $args === []) {
+            return [];
+        }
+
+        $calls = [];
+        foreach (array_values(array_unique($args)) as $index => $indexerId) {
+            $calls[] = $this->toolCall($subcommand, $index, ['action' => 'reindex', 'indexer_id' => $indexerId]);
+        }
+
+        return $calls;
     }
 
     private function list(int $adminUserId, callable $onChunk): string
@@ -130,24 +166,7 @@ class IndexCommand extends AbstractToolCommand
             return $this->reindexByIds(array_values(array_unique($args)), $adminUserId, $onChunk);
         }
 
-        $result = $this->runTool(['action' => 'reindex_all'], $adminUserId, $onChunk);
-        if (isset($result['error'])) {
-            return $this->renderError((string)$result['error']);
-        }
-
-        $reindexed = array_map('strval', (array)($result['reindexed'] ?? []));
-        $errors = array_map('strval', (array)($result['errors'] ?? []));
-
-        $lines = [sprintf('**%d indexer%s reindexed.**', count($reindexed), count($reindexed) === 1 ? '' : 's')];
-        if ($reindexed !== []) {
-            $lines[] = implode(', ', array_map(static fn (string $id): string => '`' . $id . '`', $reindexed));
-        }
-        if ($errors !== []) {
-            $lines[] = '**Failed:**';
-            $lines[] = implode("\n", array_map(static fn (string $error): string => '- ' . $error, $errors));
-        }
-
-        return implode("\n\n", $lines);
+        return self::REINDEX_PUSHBACK;
     }
 
     /**

@@ -73,7 +73,11 @@ final class ChatServiceTest extends TestCase
      *
      * @param FakeSkill[] $extraSkills
      */
-    private function buildChatService(array $extraSkills = [], ?PrivacyService $privacy = null): ChatService
+    private function buildChatService(
+        array $extraSkills = [],
+        ?PrivacyService $privacy = null,
+        bool $answerWidgets = false
+    ): ChatService
     {
         $authorization = $this->createMock(AuthorizationInterface::class);
         $authorization->method('isAllowed')->willReturn(true);
@@ -99,14 +103,23 @@ final class ChatServiceTest extends TestCase
             $this->requests[] = $messages;
             return array_shift($this->responses) ?? ['content' => 'done', 'tool_calls' => []];
         });
-        $client->method('stream')->willReturnCallback(function (AiClientInterface $c, array $messages): array {
-            $this->requests[] = $messages;
-            return array_shift($this->responses) ?? ['content' => 'done', 'tool_calls' => []];
-        });
+        $client->method('stream')->willReturnCallback(
+            function (AiClientInterface $c, array $messages, array $tools, callable $onChunk): array {
+                $this->requests[] = $messages;
+                $response = array_shift($this->responses) ?? ['content' => 'done', 'tool_calls' => []];
+                foreach ($response['streamed'] ?? [] as $text) {
+                    $onChunk('text', ['text' => $text]);
+                }
+                unset($response['streamed']);
+
+                return $response;
+            }
+        );
 
         $json = new Json();
         return new ChatService(
-            (new FakeConfigRepository())->withMaxToolIterations(5)->withMaxResponseTokens(4000),
+            (new FakeConfigRepository())->withMaxToolIterations(5)->withMaxResponseTokens(4000)
+                ->withAnswerWidgets($answerWidgets),
             $client,
             new ToolRegistry($checker, array_merge([$cmsData], $extraSkills)),
             new DebugLogger(new FakeLogger(), $json),
@@ -173,6 +186,31 @@ final class ChatServiceTest extends TestCase
             ['Order #100 is canceled and cannot be reopened.', 'Reserved stock returns to inventory.'],
             $confirm['tools'][1]['impacts']
         );
+    }
+
+    #[Test]
+    public function confirmationFlagsAWriteCarryingAMaskedPersonalValue(): void
+    {
+        $this->grants = ['cms_data' => 'write'];
+        $service = $this->buildChatService();
+        $this->responses = [[
+            'content' => '',
+            'tool_calls' => [
+                ['id' => 'call_1', 'name' => 'cms_data', 'input' => ['action' => 'update_page', 'content' => 'Mail mago://email_1']],
+                ['id' => 'call_2', 'name' => 'cms_data', 'input' => ['action' => 'update_page', 'content' => 'About us']],
+            ],
+        ]];
+        $confirm = null;
+        $onChunk = static function (string $type, array $data) use (&$confirm): void {
+            if ($type === 'confirm') {
+                $confirm = $data;
+            }
+        };
+
+        $service->processMessageStreaming([$this->userMessage()], $onChunk, null, self::ADMIN_ID);
+
+        self::assertTrue($confirm['tools'][0]['sensitive']);
+        self::assertArrayNotHasKey('sensitive', $confirm['tools'][1]);
     }
 
     #[Test]
@@ -302,6 +340,21 @@ final class ChatServiceTest extends TestCase
         $instruction = $this->instructionMessage($this->requests[1]);
         self::assertNotNull($instruction);
         self::assertStringContainsString('Always mention the page count.', $instruction['content']);
+        self::assertStringNotContainsString(AnswerWidgets::MARKER, $instruction['content']);
+    }
+
+    #[Test]
+    public function instructionsRemindTheModelOfTheWidgetsWhenAnswerWidgetsAreOn(): void
+    {
+        $chatService = $this->buildChatService(answerWidgets: true);
+        $this->responses = [$this->toolCallResponse('list_pages')];
+
+        $chatService->processMessage([$this->userMessage()], null, self::ADMIN_ID);
+
+        $instruction = $this->instructionMessage($this->requests[1]);
+        self::assertNotNull($instruction);
+        self::assertStringContainsString('Always mention the page count.', $instruction['content']);
+        self::assertStringContainsString((new AnswerWidgets())->toToolReminder(), $instruction['content']);
     }
 
     #[Test]
@@ -522,6 +575,97 @@ final class ChatServiceTest extends TestCase
         self::assertSame(['staged' => true], $results['call_1']);
     }
 
+    #[Test]
+    public function itSendsTheBrowserTheDirectiveUnfilteredByThePrivacyClassification(): void
+    {
+        $directive = [
+            'type' => 'form_navigate',
+            'target' => ['namespace' => 'product_form', 'entity_id' => '3754', 'store_id' => '', 'is_new' => false],
+            'url' => 'https://shop.test/admin/catalog/product/edit/id/3754/key/abc123/',
+            'changes' => [['path' => 'data.product.description', 'value' => 'Mail jan@example.com for sizes']],
+        ];
+        $service = $this->serviceWithTool($this->pageFormTool([
+            'staged' => true,
+            'entity_id' => '3754',
+            'client_directive' => $directive,
+        ]));
+
+        $events = [];
+        $service->executeConfirmedTools(
+            [['id' => 'call_1', 'name' => 'page_form', 'input' => ['action' => 'write_fields']]],
+            null,
+            function (string $event, array $data) use (&$events): void {
+                $events[] = [$event, $data];
+            }
+        );
+
+        self::assertContains(['form_apply', $directive], $events);
+    }
+
+    #[Test]
+    public function itStillTokenisesTheEntityIdInTheResultTheModelSees(): void
+    {
+        $service = $this->serviceWithTool($this->pageFormTool([
+            'staged' => true,
+            'entity_id' => '3754',
+            'client_directive' => ['type' => 'form_write', 'target' => ['entity_id' => '3754']],
+        ]));
+
+        $results = $service->executeConfirmedTools(
+            [['id' => 'call_1', 'name' => 'page_form', 'input' => ['action' => 'write_fields']]],
+            null,
+            function (string $event, array $data): void {
+            }
+        );
+
+        self::assertSame(['staged' => true, 'entity_id' => 'mago://entity_1'], $results['call_1']);
+    }
+
+    #[Test]
+    public function itKeepsTheDirectiveOutOfTheToolMessageWhenNotStreaming(): void
+    {
+        $this->grants['page_form'] = 'read';
+        $auth = $this->createMock(AuthorizationInterface::class);
+        $auth->method('isAllowed')->willReturn(true);
+        $pageForm = new FakeSkill('page_form', $auth, [
+            'describe_form' => new FakeAction('describe_form', true, [], '', [
+                'staged' => true,
+                'client_directive' => ['type' => 'form_write', 'target' => ['entity_id' => '3754']],
+            ]),
+        ]);
+        $this->responses = [[
+            'content' => '',
+            'tool_calls' => [['id' => 'call_1', 'name' => 'page_form', 'input' => ['action' => 'describe_form']]],
+        ]];
+
+        $this->buildChatService([$pageForm])->processMessage([$this->userMessage()], null, self::ADMIN_ID);
+
+        self::assertSame('{"staged":true}', $this->lastMessageOfRole($this->requests[1], 'tool')['content']);
+    }
+
+    /**
+     * @param array<string, mixed> $result
+     */
+    private function pageFormTool(array $result): FakeTool
+    {
+        return (new FakeTool('page_form', ['write_fields'], []))
+            ->withResult($result)
+            ->withFieldClassification([
+                'client_directive' => [PiiClass::PUBLIC],
+                'staged' => [PiiClass::PUBLIC],
+                'target' => [PiiClass::PUBLIC],
+                'namespace' => [PiiClass::PUBLIC],
+                'store_id' => [PiiClass::PUBLIC],
+                'is_new' => [PiiClass::PUBLIC],
+                'type' => [PiiClass::PUBLIC],
+                'changes' => [PiiClass::PUBLIC],
+                'path' => [PiiClass::PUBLIC],
+                'value' => [PiiClass::PUBLIC],
+                'entity_id' => [PiiClass::TOKENISE, 'entity'],
+                'url' => [PiiClass::TOKENISE, 'url'],
+            ]);
+    }
+
     private function serviceWithTool(FakeTool $tool): ChatService
     {
         return new ChatService(
@@ -589,7 +733,7 @@ final class ChatServiceTest extends TestCase
     }
 
     #[Test]
-    public function itRefusesAConfirmedWriteCarryingASensitiveTokenEvenWhenResolvable(): void
+    public function itRehydratesAConfirmedPersonalValueIntoTheWrite(): void
     {
         $this->grants['cms_data'] = 'write';
         $echo = new class implements \MagoAssistant\Mago\Api\Skill\ActionInterface {
@@ -648,11 +792,10 @@ final class ChatServiceTest extends TestCase
             'input' => ['action' => 'update_page', 'content' => 'Contact: mago://email_1'],
         ]], self::ADMIN_ID);
 
-        // Resolvable or not, a sensitive-class token never rehydrates into a write: this is the
-        // rehydration-oracle defense (prompt injection cannot exfiltrate vaulted PII via writes).
-        self::assertArrayHasKey('error', $results['call_1']);
-        self::assertStringContainsString('masked personal value', (string)$results['call_1']['error']);
-        self::assertNull($echo->received);
+        // #114: a personal value the admin approved on the card (shown there in plain text, with a
+        // warning) is written as itself, not refused and not as its token.
+        self::assertArrayNotHasKey('error', $results['call_1']);
+        self::assertSame('Contact: jan@example.com', $echo->received['content'] ?? null);
     }
 
     #[Test]
@@ -748,6 +891,214 @@ final class ChatServiceTest extends TestCase
 
         self::assertArrayHasKey('error', $results['call_1']);
         self::assertStringContainsString('masked for privacy', (string)$results['call_1']['error']);
+    }
+
+    #[Test]
+    public function streamingRePresentsAnAnswerThatDumpedRawJson(): void
+    {
+        $this->responses = [
+            ['content' => 'Here is the last order: {"type":"record","title":"Order #2",'
+                . '"rows":[{"label":"Total","value":"€39.64"}]}', 'tool_calls' => []],
+            ['content' => 'The last order is #2 for €39.64.', 'tool_calls' => []],
+        ];
+        $events = [];
+        $onChunk = static function (string $type, array $data) use (&$events): void {
+            $events[] = $type;
+        };
+
+        $result = $this->chatService->processMessageStreaming([$this->userMessage()], $onChunk, null, self::ADMIN_ID);
+
+        self::assertContains('replace', $events, 'the panel is told to drop the raw JSON it streamed');
+        self::assertSame('The last order is #2 for €39.64.', $result['content'], 'the clean re-presentation is returned');
+        self::assertCount(2, $this->requests, 'the model was re-prompted once');
+        self::assertStringContainsString('raw structured data', $this->lastMessageOfRole($this->requests[1], 'user')['content']);
+    }
+
+    #[Test]
+    public function streamingRePresentsAnAnswerThatDumpedHeaderlessXml(): void
+    {
+        $this->responses = [
+            ['content' => 'The config is <config><item>a</item><item>b</item></config>', 'tool_calls' => []],
+            ['content' => 'The config holds two items: a and b.', 'tool_calls' => []],
+        ];
+        $events = [];
+        $onChunk = static function (string $type, array $data) use (&$events): void {
+            $events[] = $type;
+        };
+
+        $result = $this->chatService->processMessageStreaming([$this->userMessage()], $onChunk, null, self::ADMIN_ID);
+
+        self::assertContains('replace', $events, 'xml-shaped output with no <?xml header is still caught');
+        self::assertSame('The config holds two items: a and b.', $result['content']);
+        self::assertCount(2, $this->requests);
+    }
+
+    #[Test]
+    public function aCleanProseAnswerIsNotRePresented(): void
+    {
+        $this->responses = [['content' => 'The last order is #2 for €39.64.', 'tool_calls' => []]];
+        $events = [];
+        $onChunk = static function (string $type, array $data) use (&$events): void {
+            $events[] = $type;
+        };
+
+        $result = $this->chatService->processMessageStreaming([$this->userMessage()], $onChunk, null, self::ADMIN_ID);
+
+        self::assertNotContains('replace', $events);
+        self::assertCount(1, $this->requests);
+        self::assertSame('The last order is #2 for €39.64.', $result['content']);
+    }
+
+    #[Test]
+    public function aProperlyFencedWidgetIsNotRePresented(): void
+    {
+        $this->responses = [['content' => "Here is the order:\n```mago\n"
+            . '{"type":"record","title":"Order #2","rows":[{"label":"Total","value":"€39.64"}]}'
+            . "\n```", 'tool_calls' => []]];
+        $events = [];
+        $onChunk = static function (string $type, array $data) use (&$events): void {
+            $events[] = $type;
+        };
+
+        $this->chatService->processMessageStreaming([$this->userMessage()], $onChunk, null, self::ADMIN_ID);
+
+        self::assertNotContains('replace', $events, 'a correctly fenced widget is intentional, not a leak');
+        self::assertCount(1, $this->requests);
+    }
+
+    #[Test]
+    public function nonStreamingRePresentsAnAnswerThatDumpedRawJson(): void
+    {
+        $this->responses = [
+            ['content' => 'Order: {"type":"record","title":"Order #2",'
+                . '"rows":[{"label":"Total","value":"€39.64"}]}', 'tool_calls' => []],
+            ['content' => 'The last order is #2 for €39.64.', 'tool_calls' => []],
+        ];
+
+        $result = $this->chatService->processMessage([$this->userMessage()], null, self::ADMIN_ID);
+
+        self::assertSame('The last order is #2 for €39.64.', $result['content']);
+        self::assertCount(2, $this->requests);
+        self::assertStringContainsString('raw structured data', $this->lastMessageOfRole($this->requests[1], 'user')['content']);
+    }
+
+    #[Test]
+    public function itRePromptsAtMostOnceEvenWhenTheModelKeepsDumpingRawData(): void
+    {
+        $raw = 'Order: {"type":"record","title":"Order #2","rows":[{"label":"Total","value":"€39.64"}]}';
+        $this->responses = [
+            ['content' => $raw, 'tool_calls' => []],
+            ['content' => $raw, 'tool_calls' => []],
+        ];
+        $replaces = 0;
+        $onChunk = static function (string $type, array $data) use (&$replaces): void {
+            if ($type === 'replace') {
+                $replaces++;
+            }
+        };
+
+        $result = $this->chatService->processMessageStreaming([$this->userMessage()], $onChunk, null, self::ADMIN_ID);
+
+        self::assertSame(1, $replaces, 're-presented once, then the second answer is accepted rather than looping');
+        self::assertCount(2, $this->requests);
+        self::assertSame($raw, $result['content']);
+    }
+
+    #[Test]
+    public function itTellsThePanelToReplaceBetweenTheRawAnswerAndTheRePresentedOne(): void
+    {
+        $raw = 'Order: {"title":"Order #2","total":"€39.64"}';
+        $clean = 'The last order is #2 for €39.64.';
+        $this->responses = [
+            ['content' => $raw, 'tool_calls' => [], 'streamed' => [$raw]],
+            ['content' => $clean, 'tool_calls' => [], 'streamed' => [$clean]],
+        ];
+        $events = [];
+        $onChunk = static function (string $type, array $data) use (&$events): void {
+            $events[] = $type . ':' . ($data['text'] ?? '');
+        };
+
+        $this->chatService->processMessageStreaming([$this->userMessage()], $onChunk, null, self::ADMIN_ID);
+
+        self::assertSame(['text:' . $raw, 'replace:', 'text:' . $clean], $events);
+    }
+
+    #[Test]
+    public function itKeepsTheExecutedToolCallsWhenTheAnswerAfterThemIsRePresented(): void
+    {
+        $this->responses = [
+            $this->toolCallResponse('list_pages'),
+            ['content' => 'Pages: [{"id":1,"title":"Home"},{"id":2,"title":"About"}]', 'tool_calls' => []],
+            ['content' => 'There are two pages: Home and About.', 'tool_calls' => []],
+        ];
+
+        $result = $this->chatService->processMessageStreaming([$this->userMessage()], static function (): void {
+        }, null, self::ADMIN_ID);
+
+        self::assertSame('There are two pages: Home and About.', $result['content']);
+        self::assertSame(['call_1'], array_column($result['executed_tool_calls'], 'id'));
+        self::assertCount(3, $this->requests);
+    }
+
+    #[Test]
+    public function itDoesNotRePresentJsonTheModelPutInInlineCode(): void
+    {
+        $this->responses = [['content' => 'Send `{"sku":"24-MB01","qty":2}` as the request body.', 'tool_calls' => []]];
+
+        $result = $this->chatService->processMessage([$this->userMessage()], null, self::ADMIN_ID);
+
+        self::assertCount(1, $this->requests);
+        self::assertSame('Send `{"sku":"24-MB01","qty":2}` as the request body.', $result['content']);
+    }
+
+    #[Test]
+    public function itDoesNotRePresentASingleMemberObject(): void
+    {
+        $this->responses = [['content' => 'The total is {"total":"€39"}.', 'tool_calls' => []]];
+
+        $this->chatService->processMessage([$this->userMessage()], null, self::ADMIN_ID);
+
+        self::assertCount(1, $this->requests);
+    }
+
+    #[Test]
+    public function itRePresentsAnObjectWithTwoMembers(): void
+    {
+        $this->responses = [
+            ['content' => 'The totals are {"total":"€39","tax":"€7"}.', 'tool_calls' => []],
+            ['content' => 'The total is €39, of which €7 is tax.', 'tool_calls' => []],
+        ];
+
+        $result = $this->chatService->processMessage([$this->userMessage()], null, self::ADMIN_ID);
+
+        self::assertCount(2, $this->requests);
+        self::assertSame('The total is €39, of which €7 is tax.', $result['content']);
+    }
+
+    #[Test]
+    public function itDoesNotRePresentBracesThatAreNotValidJson(): void
+    {
+        $this->responses = [
+            ['content' => 'Fill in {name: your name, email: your email} and [first, second].', 'tool_calls' => []],
+        ];
+
+        $this->chatService->processMessage([$this->userMessage()], null, self::ADMIN_ID);
+
+        self::assertCount(1, $this->requests);
+    }
+
+    #[Test]
+    public function itRePresentsAnAnswerThatStartsWithAnXmlDeclaration(): void
+    {
+        $this->responses = [
+            ['content' => '<?xml version="1.0"?><config/>', 'tool_calls' => []],
+            ['content' => 'The config file is empty.', 'tool_calls' => []],
+        ];
+
+        $result = $this->chatService->processMessage([$this->userMessage()], null, self::ADMIN_ID);
+
+        self::assertCount(2, $this->requests);
+        self::assertSame('The config file is empty.', $result['content']);
     }
 
     private function toolCallResponse(string $action, array $input = []): array

@@ -10,6 +10,7 @@ use Magento\Framework\AuthorizationInterface;
 use MagoAssistant\Mago\Service\Skills\PermissionChecker;
 use MagoAssistant\Mago\Service\Tool\ToolRegistry;
 use MagoAssistant\Mago\Test\Unit\Fakes\FakeAction;
+use MagoAssistant\Mago\Test\Unit\Fakes\FakeAvailabilityAwareTool;
 use MagoAssistant\Mago\Test\Unit\Fakes\FakeAuthorization;
 use MagoAssistant\Mago\Test\Unit\Fakes\FakePermissionChecker;
 use MagoAssistant\Mago\Test\Unit\Fakes\FakeSkill;
@@ -319,5 +320,18 @@ final class ToolRegistryTest extends TestCase
 
         $definitions = $registry->getToolDefinitions(self::ADMIN_USER_ID);
         self::assertSame(['view', 'do'], $definitions[0]['parameters']['properties']['action']['enum']);
+    }
+
+    #[Test]
+    public function itLeavesOutToolsThatAreNotAvailableOnThisStore(): void
+    {
+        $available = new FakeAvailabilityAwareTool('stock_level_msi', true);
+        $unavailable = new FakeAvailabilityAwareTool('stock_level', false);
+        $registry = new ToolRegistry(null, [$available, $unavailable]);
+
+        self::assertSame([$available], array_values($registry->getAllTools()));
+        self::assertSame(['stock_level_msi' => $available], $registry->getEnabledTools(self::ADMIN_USER_ID));
+        self::assertNull($registry->getToolByName('stock_level'));
+        self::assertNull($registry->getTool('stock_level', self::ADMIN_USER_ID));
     }
 }

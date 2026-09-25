@@ -1,0 +1,39 @@
+{
+  "mappings": [
+    {
+      "name": "Slash confirm - follow-up turn after the confirmed /cache clean ran",
+      "priority": 1,
+      "request": {
+        "method": "POST",
+        "urlPath": "/v1/chat/completions",
+        "bodyPatterns": [
+          {"contains": "cache clean config_webservice"},
+          {"contains": "\"role\":\"tool\""},
+          {"contains": "has been flushed"}
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": "text/event-stream"},
+        "bodyFileName": "slash-confirm-summary.sse",
+        "chunkedDribbleDelay": {"numberOfChunks": 10, "totalDuration": 100}
+      }
+    },
+    {
+      "name": "Slash confirm - fallback when the cleaned cache type is missing from the tool result",
+      "priority": 5,
+      "request": {
+        "method": "POST",
+        "urlPath": "/v1/chat/completions",
+        "bodyPatterns": [
+          {"contains": "cache clean config_webservice"}
+        ]
+      },
+      "response": {
+        "status": 200,
+        "headers": {"Content-Type": "text/event-stream"},
+        "bodyFileName": "slash-confirm-not-run.sse"
+      }
+    }
+  ]
+}

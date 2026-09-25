@@ -1,0 +1,8 @@
+data: {"id":"chatcmpl-e2e-rawdata-clean","object":"chat.completion.chunk","created":1754000021,"model":"gemma-3-4b-it-qat","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-e2e-rawdata-clean","object":"chat.completion.chunk","created":1754000021,"model":"gemma-3-4b-it-qat","choices":[{"index":0,"delta":{"content":"Order E2E-RAW-1 came to 39.64 in total."},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-e2e-rawdata-clean","object":"chat.completion.chunk","created":1754000021,"model":"gemma-3-4b-it-qat","choices":[{"index":0,"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":950,"completion_tokens":12,"total_tokens":962}}
+
+data: [DONE]
+

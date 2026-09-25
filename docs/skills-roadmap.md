@@ -27,6 +27,7 @@ Overview of all Magento admin areas, current skill coverage, and planned additio
 | `customer_data` | count, recent_signups, top_spenders, lookup_customer |
 | `config_reader` | Read config by path/scope |
 | `admin_navigator` | Search admin pages, direct links to entities |
+| `stock_level` / `stock_level_msi` | Stock of one SKU, legacy stock item or per MSI source and stock |
 
 ### Write (requires confirmation)
 | Skill | Actions |

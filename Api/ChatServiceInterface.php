@@ -52,4 +52,20 @@ interface ChatServiceInterface
         ?array $selectedIds = null,
         ?int $conversationId = null
     ): array;
+
+    /**
+     * Put a set of write tool calls to the administrator on the confirmation card and return the
+     * pending result, without a model turn. The slash-command write path uses this so a typed
+     * /cache flush or /index reindex is confirmed on the same card as a write the model proposed.
+     *
+     * @param array<int, array<string, mixed>> $toolCalls
+     * @param callable|null $onChunk fn(string $type, array $data)
+     * @param int|null $adminUserId
+     * @return array{content: string, tool_calls: array<int, array<string, mixed>>, pending_confirmation: bool}
+     */
+    public function prepareToolConfirmation(
+        array $toolCalls,
+        ?callable $onChunk = null,
+        ?int $adminUserId = null
+    ): array;
 }

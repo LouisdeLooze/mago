@@ -24,7 +24,8 @@ class DbVaultStorage implements VaultStorageInterface
     public function __construct(
         private readonly ResourceConnection $resourceConnection,
         private readonly ErrorLogger $errorLogger,
-        private readonly DebugLogger $debugLogger
+        private readonly DebugLogger $debugLogger,
+        private readonly VaultValueCipher $cipher
     ) {
     }
 
@@ -39,7 +40,7 @@ class DbVaultStorage implements VaultStorageInterface
 
             $rows = [];
             foreach ($connection->fetchAll($select) as $row) {
-                $rows[] = ['token' => $row['token'], 'value' => $row['value'], 'type' => $row['token_type']];
+                $rows[] = ['token' => $row['token'], 'value' => $this->cipher->decrypt((string)$row['value']), 'type' => $row['token_type']];
             }
 
             return $rows;
@@ -57,7 +58,7 @@ class DbVaultStorage implements VaultStorageInterface
             $connection->insert($this->resourceConnection->getTableName(self::TABLE), [
                 'conversation_id' => $conversationId,
                 'token' => $token,
-                'value' => $value,
+                'value' => $this->cipher->encrypt($value),
                 'token_type' => $type,
             ]);
         } catch (DuplicateException $e) {

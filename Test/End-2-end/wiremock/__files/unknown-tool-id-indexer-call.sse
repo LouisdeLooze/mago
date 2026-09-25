@@ -1,0 +1,12 @@
+data: {"id":"chatcmpl-e2e-toolid-1","object":"chat.completion.chunk","created":1754000100,"model":"gemma-3-4b-it-qat","choices":[{"index":0,"delta":{"role":"assistant","content":""},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-e2e-toolid-1","object":"chat.completion.chunk","created":1754000100,"model":"gemma-3-4b-it-qat","choices":[{"index":0,"delta":{"content":"I will reindex the stock index."},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-e2e-toolid-1","object":"chat.completion.chunk","created":1754000100,"model":"gemma-3-4b-it-qat","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_e2e_toolid_1","type":"function","function":{"name":"indexer_manager","arguments":""}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-e2e-toolid-1","object":"chat.completion.chunk","created":1754000100,"model":"gemma-3-4b-it-qat","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"action\":\"reindex\",\"indexer_id\":\"cataloginventory_stock_stock\"}"}}]},"finish_reason":null}]}
+
+data: {"id":"chatcmpl-e2e-toolid-1","object":"chat.completion.chunk","created":1754000100,"model":"gemma-3-4b-it-qat","choices":[{"index":0,"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":1300,"completion_tokens":30,"total_tokens":1330}}
+
+data: [DONE]
+

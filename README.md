@@ -130,6 +130,7 @@ These calls verify the TLS certificate by default. If the internal URL points at
 | Store Configuration | `config_reader`, `config_writer`, `cache_manager`, `indexer_manager` | Read / Write |
 | Content Management | `cms_data`, `content_generator` | Read / Write |
 | Navigation | `admin_navigator` | Read |
+| Inventory | `stock_level` (without MSI), `stock_level_msi` (with MSI) | Read |
 | Documentation | `docs_search` | Read |
 | Form Access | `page_form` | Read / Stage (never saves) |
 

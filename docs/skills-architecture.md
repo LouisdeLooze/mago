@@ -310,6 +310,15 @@ The module ships with 10 tools grouped into 4 skill areas:
 | `product_data` | `Service\Skills\Analytics\ProductData` | Yes | Product search, lookup by SKU, inventory counts, low-stock alerts. |
 | `customer_data` | `Service\Skills\Analytics\CustomerData` | Yes | Customer counts, recent signups, top spenders. **Never returns PII** — only aggregates and IDs. |
 
+### Inventory
+
+Both tools implement `AvailabilityAwareToolInterface`, so the registry offers exactly one of them depending on whether Multi-Source Inventory is enabled.
+
+| Tool | Class | Read-only | Description |
+|------|-------|-----------|-------------|
+| `stock_level` | `Service\Skills\Inventory\StockLevel` | Yes | Stock of one SKU from the catalog stock item: quantity, in-stock status, manage stock, backorders. Stores without MSI only. |
+| `stock_level_msi` | `Service\Skills\Inventory\StockLevelMsi` | Yes | Quantity and status per inventory source, salable quantity per stock. Stores with MSI only; MSI services are resolved at run time so disabling or removing the Inventory modules does not break the registry. |
+
 ### Store Configuration
 
 | Tool | Class | Read-only | Description |
@@ -611,6 +620,7 @@ Add a `system.xml` field under the Admin Assistant tools section so store admins
 - **Include `_links` for navigable records** — if your tool returns orders, products, or other admin-viewable entities, add a `_links` array so the admin can click through to the relevant page.
 - **Set `isReadOnly()` correctly** — if your tool has any side effects (writes, API calls that change state), return `false`. This triggers the user confirmation flow.
 - **Classify every output field** (`getFieldClassification()`, required since 2.0.0) — the privacy filter strips any field you do not declare, so an incomplete map silently empties your tool's output. Fields that can carry personal data are `PiiClass::STRIP` (or `TOKENISE` for bare linkable ids); see `docs/privacy-mode/README.md` for the four canonical shapes.
+- **Depend on an optional module? Implement `AvailabilityAwareToolInterface`** — return `false` from `isAvailable()` when the module is off, and the registry leaves the tool out entirely. Do not inject services of that module in the constructor: the registry instantiates every tool, so a missing dependency breaks all of them. `Service\Skills\Inventory\StockLevelMsi` shows the pattern.
 - **Never return secrets** — API keys, passwords, tokens should never appear in tool output. They would be sent to the LLM.
 - **Handle errors gracefully** — throw exceptions with clear messages. The ChatService catches them and reports to the user.
 

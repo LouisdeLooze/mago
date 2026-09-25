@@ -45,6 +45,18 @@ final class FakeChatService implements ChatServiceInterface
         return ['content' => '', 'tool_calls' => []];
     }
 
+    public function prepareToolConfirmation(
+        array $toolCalls,
+        ?callable $onChunk = null,
+        ?int $adminUserId = null
+    ): array {
+        if ($onChunk) {
+            $onChunk('confirm', ['tools' => $toolCalls]);
+        }
+
+        return ['content' => '', 'tool_calls' => $toolCalls, 'pending_confirmation' => true];
+    }
+
     public function executeConfirmedTools(
         array $toolCalls,
         ?int $adminUserId = null,
