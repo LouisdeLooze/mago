@@ -171,6 +171,12 @@ When enabled, the assistant can answer "how do I…" questions from the official
 | Enable documentation grounding | `mago/docs/enabled` | `0` | Master switch; also gates the sync cron |
 | Source repository | `mago/docs/source_repo` | `mage-os/mirror-commerce-admin.en` | GitHub `owner/repo` to index. Default is the MIT-licensed Mage-OS mirror of Adobe's Commerce Admin docs |
 | Source branch / commit | `mago/docs/ref` | `main` | Branch or commit to index; pin to a commit for reproducibility |
+| Source | `mago/docs/source` | `github_public` | Where the repo is hosted and how it is read: `github_public`, or `github_app` for a **private** repo (see below) |
+| GitHub App ID | `mago/docs/github_app_id` | — | Numeric App ID (GitHub App mode only) |
+| GitHub App private key | `mago/docs/github_private_key` | — | The App's PEM private key, stored **encrypted** (GitHub App mode only) |
+| GitHub App installation ID | `mago/docs/github_installation_id` | — | Optional; auto-discovered from the source repo when blank |
+| Describe what the documentation contains | `mago/docs/describe_enabled` | `0` | Turn on to tell the assistant what your own docs cover (instead of assuming official Magento docs) |
+| Documentation description | `mago/docs/description` | — | Free-text description of the corpus, woven into the `docs_search` tool so the model knows when to search it |
 | Results per search | `mago/docs/top_k` | `5` | Max doc pages returned per search |
 | Sync schedule | `mago/docs/cron_expr` | `0 4 1 * *` (monthly) | Cron expression for the re-index job |
 
@@ -182,7 +188,7 @@ A cron job (`mago_docs` group, its own process) indexes the docs into the `mago_
 bin/magento mago:docs:index --force
 ```
 
-Sync is cheap to run often because it is **change-detected by git tree SHA**: an unchanged source repo costs a single API call and skips re-fetching entirely. This is why the default schedule can safely be raised when you feed docs that update more often than the Mage-OS mirror. On a real change, every `help/**.md` is fetched (including `_includes/`, needed to resolve `{{$include}}` partials), Experience League markup is normalized to plain text, and the table is swapped in a single transaction — a failed sync keeps the previous corpus, and searches keep answering from the old corpus until the new one is committed. Only one sync runs at a time: a second invocation (cron overlapping a manual run, or a double-started command) reports `another sync is already running` and exits instead of interfering.
+Sync is cheap to run often because it is **change-detected by the ref's commit SHA**: an unchanged source repo costs a single small API call and skips the download entirely. This is why the default schedule can safely be raised when you feed docs that update more often than the Mage-OS mirror. On a real change, the whole ref is downloaded **once as a tarball** (`GET /repos/{repo}/tarball/{ref}`) rather than fetching each file individually — dramatically faster than the old per-file approach (the default mirror is ~620 files). The tarball is streamed to a temp file and parsed a block at a time, so peak memory stays around 12 MB even though the mirror's archive is ~170 MB. Every `help/**.md` is read from it (including `_includes/`, needed to resolve `{{$include}}` partials), Experience League markup is normalized to plain text, and the table is swapped in a single transaction — a failed sync keeps the previous corpus, and searches keep answering from the old corpus until the new one is committed. Only one sync runs at a time: a second invocation (cron overlapping a manual run, or a double-started command) reports `another sync is already running` and exits instead of interfering.
 
 ### Why MySQL FULLTEXT (not embeddings)
 
@@ -190,7 +196,25 @@ Retrieval uses a MySQL FULLTEXT index rather than vector embeddings so the featu
 
 ### Custom docs
 
-The pipeline is source-repo agnostic: point `Source repository` at any public GitHub repo of Adobe Experience League-flavored (or plain) markdown to ground the assistant on your own documentation. Private repos and non-GitHub sources are on the roadmap.
+The pipeline is source-repo agnostic: point `Source repository` at any GitHub repo of Adobe Experience League-flavored (or plain) markdown to ground the assistant on your own documentation. Public repos need no credentials; private repos are read via a GitHub App (below). Other Git hosts plug in by implementing `Api/Docs/DocsSourceInterface` and registering it in the `DocsSourcePool` in `etc/di.xml`; it then appears in the **Source** dropdown.
+
+When you point it at your own docs, turn on **Describe what the documentation contains** and write a one-line **Documentation description** of the corpus (e.g. "our internal warehouse and fulfilment runbooks"). By default the assistant is told the docs are the official Magento admin docs; the description replaces that framing in the `docs_search` tool so the model knows what the docs cover and searches them for the right questions.
+
+### Private repositories via a GitHub App
+
+To index a **private** repo, authenticate as a [GitHub App](https://docs.github.com/en/apps) instead of a personal token — org-managed, scoped to just the repos you install it on, and using short-lived tokens rather than a long-lived secret.
+
+**One-click setup (recommended).** In `Stores > Configuration > Mago Assistant > Documentation`, set **Source** to *GitHub App* and click **Create GitHub App on GitHub**. This uses GitHub's [App Manifest flow](https://docs.github.com/en/apps/sharing-github-apps/registering-a-github-app-from-a-manifest): GitHub opens with the App pre-configured (Contents: read-only), and when you click *Create GitHub App* it sends you back here with the **App ID** and **private key** already filled in and saved (the key encrypted). You are then taken to GitHub to **install** the App on your private repository. Finally run `bin/magento mago:docs:index --force`. To create the App under an organization, type the org login into the field next to the button before clicking.
+
+**Manual setup.** If you already have (or prefer to create) an App by hand:
+
+1. Create a GitHub App (org or personal) with **Repository permissions → Contents: Read-only**. No webhook is needed.
+2. Generate a **private key** on the App's page and download the `.pem`.
+3. **Install** the App on the account/org and grant it access to the source repository.
+4. Set **Source** to *GitHub App*, then paste the **App ID** and **private key** (stored encrypted). Leave **installation ID** blank to auto-discover it from the source repo, or set it to force a specific installation.
+5. Run `bin/magento mago:docs:index --force` to index immediately.
+
+Under the hood the sync signs a short-lived RS256 JWT with the App's key, exchanges it for an installation access token, and reads the repo through the authenticated GitHub Contents API. Tokens are minted per sync run and never stored.
 
 ## Extending with Custom Skills
 

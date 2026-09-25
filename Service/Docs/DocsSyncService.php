@@ -11,6 +11,7 @@ use Magento\Framework\Lock\LockManagerInterface;
 use MagoAssistant\Mago\Api\Config\RepositoryInterface as ConfigRepository;
 use MagoAssistant\Mago\Logger\ErrorLogger;
 use MagoAssistant\Mago\Model\Doc\Repository as DocRepository;
+use MagoAssistant\Mago\Service\Docs\Source\DocsSourcePool;
 
 class DocsSyncService
 {
@@ -22,7 +23,7 @@ class DocsSyncService
 
     public function __construct(
         private readonly ConfigRepository $config,
-        private readonly GitHubDocsSource $source,
+        private readonly DocsSourcePool $sources,
         private readonly ExlMarkdownNormalizer $normalizer,
         private readonly DocRepository $docRepository,
         private readonly FlagManager $flagManager,
@@ -72,33 +73,33 @@ class DocsSyncService
         $ref = $this->config->getDocsRef();
 
         try {
-            $progress('tree', 0, 0);
-            $tree = $this->source->fetchTree($repo, $ref);
-            if ($tree === null) {
-                throw new \RuntimeException('Could not fetch doc tree from ' . $repo . '@' . $ref);
+            $source = $this->sources->getActive();
+
+            $progress('sha', 0, 0);
+            $sha = $source->fetchRevision($repo, $ref);
+            if ($sha === null || $sha === '') {
+                throw new \RuntimeException(
+                    'Could not read ' . $repo . '@' . $ref . ' from ' . $source->getLabel()
+                );
             }
 
-            $sha = $tree['sha'];
             $storedShaFlag = $this->flagManager->getFlagData(self::FLAG_SHA);
             $storedSha = is_string($storedShaFlag) ? $storedShaFlag : '';
             $count = $this->docRepository->count();
 
-            if (!$force && $sha !== '' && $sha === $storedSha && $count > 0) {
+            if (!$force && $sha === $storedSha && $count > 0) {
                 return ['skipped' => 'up-to-date', 'sha' => $sha, 'docs' => $count];
             }
 
-            $totalPaths = count($tree['paths']);
-            $rawByPath = [];
-            foreach ($tree['paths'] as $i => $path) {
-                $progress('fetch', $i + 1, $totalPaths);
-                $content = $this->source->fetchRaw($repo, $ref, $path);
-                if ($content !== null) {
-                    $rawByPath[$path] = $content;
-                }
+            // The source hands back every doc in the ref at once; includes are resolved against that set.
+            $progress('download', 0, 0);
+            $rawByPath = $source->fetchFiles($repo, $ref);
+            if ($rawByPath === null) {
+                throw new \RuntimeException('Could not download docs archive from ' . $repo . '@' . $ref);
             }
 
             if (!$rawByPath) {
-                throw new \RuntimeException('Fetched 0 files from ' . $repo . '@' . $ref . ' — keeping existing corpus');
+                throw new \RuntimeException('Found 0 docs in ' . $repo . '@' . $ref . ' — keeping existing corpus');
             }
 
             $resolver = static function (string $include) use ($rawByPath): ?string {
@@ -127,7 +128,7 @@ class DocsSyncService
                     'description' => $normalized['description'],
                     'tags' => $normalized['tags'],
                     'edition' => $this->normalizer->edition($path),
-                    'url' => $this->normalizer->url($repo, $ref, $path),
+                    'url' => $source->getFileUrl($repo, $ref, $path),
                     'content' => $normalized['content'],
                     'source_sha' => $sha,
                 ];

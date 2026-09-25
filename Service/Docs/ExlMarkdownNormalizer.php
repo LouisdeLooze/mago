@@ -93,11 +93,6 @@ class ExlMarkdownNormalizer
         return null;
     }
 
-    public function url(string $repo, string $ref, string $path): string
-    {
-        return 'https://github.com/' . $repo . '/blob/' . $ref . '/' . $path;
-    }
-
     private function cleanScalar(string $value): string
     {
         $value = trim($value);

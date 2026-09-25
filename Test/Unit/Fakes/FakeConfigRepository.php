@@ -15,6 +15,72 @@ class FakeConfigRepository implements RepositoryInterface
     private string $internalUrl = '';
     private int $maxToolIterations = 0;
     private bool $answerWidgets = false;    private int $maxResponseTokens = 0;
+    private bool $docsEnabled = false;
+    private string $docsSourceCode = 'github_public';
+    private string $docsSourceRepo = '';
+    private string $docsRef = '';
+    private string $docsGithubAppId = '';
+    private string $docsGithubInstallationId = '';
+    private string $docsGithubPrivateKey = '';
+    private bool $docsDescribeEnabled = false;
+    private string $docsDescription = '';
+
+    public function withDocsDescribeEnabled(bool $enabled): self
+    {
+        $this->docsDescribeEnabled = $enabled;
+
+        return $this;
+    }
+
+    public function withDocsDescription(string $description): self
+    {
+        $this->docsDescription = $description;
+
+        return $this;
+    }
+
+    public function withDocsEnabled(bool $enabled): self
+    {
+        $this->docsEnabled = $enabled;
+
+        return $this;
+    }
+
+    public function withDocsRepo(string $repo, string $ref): self
+    {
+        $this->docsSourceRepo = $repo;
+        $this->docsRef = $ref;
+
+        return $this;
+    }
+
+    public function withDocsSourceCode(string $code): self
+    {
+        $this->docsSourceCode = $code;
+
+        return $this;
+    }
+
+    public function withDocsGithubAppId(string $appId): self
+    {
+        $this->docsGithubAppId = $appId;
+
+        return $this;
+    }
+
+    public function withDocsGithubInstallationId(string $installationId): self
+    {
+        $this->docsGithubInstallationId = $installationId;
+
+        return $this;
+    }
+
+    public function withDocsGithubPrivateKey(string $privateKey): self
+    {
+        $this->docsGithubPrivateKey = $privateKey;
+
+        return $this;
+    }
 
     public function withMaxToolIterations(int $maxToolIterations): self
     {
@@ -162,22 +228,52 @@ class FakeConfigRepository implements RepositoryInterface
 
     public function isDocsEnabled(): bool
     {
-        return false;
+        return $this->docsEnabled;
     }
 
     public function getDocsSourceRepo(): string
     {
-        return '';
+        return $this->docsSourceRepo;
     }
 
     public function getDocsRef(): string
     {
-        return '';
+        return $this->docsRef;
     }
 
     public function getDocsTopK(): int
     {
         return 0;
+    }
+
+    public function getDocsSourceCode(): string
+    {
+        return $this->docsSourceCode;
+    }
+
+    public function getDocsGithubAppId(): string
+    {
+        return $this->docsGithubAppId;
+    }
+
+    public function getDocsGithubInstallationId(): string
+    {
+        return $this->docsGithubInstallationId;
+    }
+
+    public function getDocsGithubPrivateKey(): string
+    {
+        return $this->docsGithubPrivateKey;
+    }
+
+    public function isDocsDescribeEnabled(): bool
+    {
+        return $this->docsDescribeEnabled;
+    }
+
+    public function getDocsDescription(): string
+    {
+        return $this->docsDescription;
     }
 
     public function getPayloadRetentionDays(): int

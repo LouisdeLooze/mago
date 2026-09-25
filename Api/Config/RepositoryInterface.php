@@ -35,6 +35,12 @@ interface RepositoryInterface
     public const XML_PATH_DOCS_SOURCE_REPO = 'mago/docs/source_repo';
     public const XML_PATH_DOCS_REF = 'mago/docs/ref';
     public const XML_PATH_DOCS_TOP_K = 'mago/docs/top_k';
+    public const XML_PATH_DOCS_SOURCE = 'mago/docs/source';
+    public const XML_PATH_DOCS_GITHUB_APP_ID = 'mago/docs/github_app_id';
+    public const XML_PATH_DOCS_GITHUB_INSTALLATION_ID = 'mago/docs/github_installation_id';
+    public const XML_PATH_DOCS_GITHUB_PRIVATE_KEY = 'mago/docs/github_private_key';
+    public const XML_PATH_DOCS_DESCRIBE_ENABLED = 'mago/docs/describe_enabled';
+    public const XML_PATH_DOCS_DESCRIPTION = 'mago/docs/description';
     /**
      * @return string
      */
@@ -169,4 +175,45 @@ interface RepositoryInterface
      * @return int
      */
     public function getDocsTopK(): int;
+
+    /**
+     * Code of the selected docs source, as registered in DocsSourcePool (e.g. 'github_public', 'github_app').
+     *
+     * @return string
+     */
+    public function getDocsSourceCode(): string;
+
+    /**
+     * @return string
+     */
+    public function getDocsGithubAppId(): string;
+
+    /**
+     * Installation id of the GitHub App on the source repo. Empty means auto-discover.
+     *
+     * @return string
+     */
+    public function getDocsGithubInstallationId(): string;
+
+    /**
+     * Decrypted PEM private key of the GitHub App.
+     *
+     * @return string
+     */
+    public function getDocsGithubPrivateKey(): string;
+
+    /**
+     * Whether the admin has supplied a custom description of what the documentation contains.
+     *
+     * @return bool
+     */
+    public function isDocsDescribeEnabled(): bool;
+
+    /**
+     * Admin-supplied description of the documentation set, woven into the docs_search tool
+     * so the model knows what the corpus covers and when to search it.
+     *
+     * @return string
+     */
+    public function getDocsDescription(): string;
 }

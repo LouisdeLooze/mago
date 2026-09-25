@@ -31,6 +31,8 @@
                 <ref>main</ref>
                 <top_k>5</top_k>
                 <cron_expr>0 4 1 * *</cron_expr>
+                <source>github_public</source>
+                <describe_enabled>0</describe_enabled>
             </docs>
         </mago>
     </default>

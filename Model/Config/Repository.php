@@ -179,4 +179,40 @@ class Repository extends System\BaseRepository implements ConfigRepositoryInterf
     {
         return (int)($this->getStoreValue(self::XML_PATH_DOCS_TOP_K, null, ScopeConfigInterface::SCOPE_TYPE_DEFAULT) ?: 5);
     }
+
+    public function getDocsSourceCode(): string
+    {
+        $value = trim($this->getStoreValue(self::XML_PATH_DOCS_SOURCE, null, ScopeConfigInterface::SCOPE_TYPE_DEFAULT));
+        return $value !== '' ? $value : 'github_public';
+    }
+
+    public function getDocsGithubAppId(): string
+    {
+        return trim($this->getStoreValue(self::XML_PATH_DOCS_GITHUB_APP_ID, null, ScopeConfigInterface::SCOPE_TYPE_DEFAULT));
+    }
+
+    public function getDocsGithubInstallationId(): string
+    {
+        return trim($this->getStoreValue(self::XML_PATH_DOCS_GITHUB_INSTALLATION_ID, null, ScopeConfigInterface::SCOPE_TYPE_DEFAULT));
+    }
+
+    public function getDocsGithubPrivateKey(): string
+    {
+        $stored = $this->getStoreValue(self::XML_PATH_DOCS_GITHUB_PRIVATE_KEY, null, ScopeConfigInterface::SCOPE_TYPE_DEFAULT);
+        if ($stored === '') {
+            return '';
+        }
+
+        return (string)$this->encryptor->decrypt($stored);
+    }
+
+    public function isDocsDescribeEnabled(): bool
+    {
+        return $this->isSetFlag(self::XML_PATH_DOCS_DESCRIBE_ENABLED, null, ScopeConfigInterface::SCOPE_TYPE_DEFAULT);
+    }
+
+    public function getDocsDescription(): string
+    {
+        return trim($this->getStoreValue(self::XML_PATH_DOCS_DESCRIPTION, null, ScopeConfigInterface::SCOPE_TYPE_DEFAULT));
+    }
 }

@@ -194,6 +194,29 @@
         </arguments>
     </type>
 
+    <!-- Docs sources: each item is one "Source" option (mago/docs/source). Add a Git host by registering it here. -->
+    <virtualType name="MagoAssistant\Mago\Service\Docs\Source\GitHub\GitHubPublicDocsSource" type="MagoAssistant\Mago\Service\Docs\Source\GitHub\GitHubDocsSource">
+        <arguments>
+            <argument name="code" xsi:type="const">MagoAssistant\Mago\Service\Docs\Source\GitHub\GitHubDocsSource::CODE_PUBLIC</argument>
+            <argument name="label" xsi:type="string">GitHub (public repository)</argument>
+        </arguments>
+    </virtualType>
+    <virtualType name="MagoAssistant\Mago\Service\Docs\Source\GitHub\GitHubAppDocsSource" type="MagoAssistant\Mago\Service\Docs\Source\GitHub\GitHubDocsSource">
+        <arguments>
+            <argument name="code" xsi:type="const">MagoAssistant\Mago\Service\Docs\Source\GitHub\GitHubDocsSource::CODE_APP</argument>
+            <argument name="label" xsi:type="string">GitHub App (private repository)</argument>
+            <argument name="tokenProvider" xsi:type="object">MagoAssistant\Mago\Service\Docs\Source\GitHub\GitHubAppTokenProvider</argument>
+        </arguments>
+    </virtualType>
+    <type name="MagoAssistant\Mago\Service\Docs\Source\DocsSourcePool">
+        <arguments>
+            <argument name="sources" xsi:type="array">
+                <item name="github_public" xsi:type="object">MagoAssistant\Mago\Service\Docs\Source\GitHub\GitHubPublicDocsSource</item>
+                <item name="github_app" xsi:type="object">MagoAssistant\Mago\Service\Docs\Source\GitHub\GitHubAppDocsSource</item>
+            </argument>
+        </arguments>
+    </type>
+
     <!-- Docs indexing CLI command -->
     <type name="Magento\Framework\Console\CommandListInterface">
         <arguments>
